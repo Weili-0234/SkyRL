@@ -659,6 +659,32 @@ def prepare_runtime_environment(cfg: Union[SkyRLConfig, DictConfig]) -> dict[str
             logger.info(f"Exporting {var_name} to ray runtime env")
             env_vars[var_name] = value
 
+    # NOTE: Export XDG_CONFIG_HOME for packages like mini-swe-agent that write to ~/.config
+    if os.environ.get("XDG_CONFIG_HOME"):
+        logger.info(f"Exporting XDG_CONFIG_HOME to ray runtime env: {os.environ['XDG_CONFIG_HOME']}")
+        env_vars["XDG_CONFIG_HOME"] = os.environ["XDG_CONFIG_HOME"]
+
+    # NOTE: Export HF_HOME for HuggingFace cache directory
+    if os.environ.get("HF_HOME"):
+        logger.info(f"Exporting HF_HOME to ray runtime env: {os.environ['HF_HOME']}")
+        env_vars["HF_HOME"] = os.environ["HF_HOME"]
+
+    # NOTE: Export XDG_CACHE_HOME for vLLM and other tools
+    if os.environ.get("XDG_CACHE_HOME"):
+        logger.info(f"Exporting XDG_CACHE_HOME to ray runtime env: {os.environ['XDG_CACHE_HOME']}")
+        env_vars["XDG_CACHE_HOME"] = os.environ["XDG_CACHE_HOME"]
+
+    # NOTE: Export FLASHINFER_WORKSPACE_DIR for flashinfer JIT cache
+    if os.environ.get("FLASHINFER_WORKSPACE_DIR"):
+        logger.info(f"Exporting FLASHINFER_WORKSPACE_DIR to ray runtime env: {os.environ['FLASHINFER_WORKSPACE_DIR']}")
+        env_vars["FLASHINFER_WORKSPACE_DIR"] = os.environ["FLASHINFER_WORKSPACE_DIR"]
+
+    # NOTE: Export TRITON_CACHE_DIR for triton cache
+    if os.environ.get("TRITON_CACHE_DIR"):
+        logger.info(f"Exporting TRITON_CACHE_DIR to ray runtime env: {os.environ['TRITON_CACHE_DIR']}")
+        env_vars["TRITON_CACHE_DIR"] = os.environ["TRITON_CACHE_DIR"]
+
+
     if SKYRL_LD_LIBRARY_PATH_EXPORT:
         # export `LD_LIBRARY_PATH` to ray runtime env.
         # For some reason the `LD_LIBRARY_PATH` is not exported to the worker with .env file.

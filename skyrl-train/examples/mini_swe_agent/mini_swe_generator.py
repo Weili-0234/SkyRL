@@ -160,6 +160,9 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
 
         # TODO (sumanthrh): This is currently hardcoded for SWEBench with 2 initial messages (system and user).
         response_messages = messages[2:]
+        print(f"DEBUG: messages length: {len(messages)}")
+        for i, msg in enumerate(messages):
+            print(f"DEBUG: message[{i}] role: {msg.get('role')}")
 
         for message in messages[:2]:
             assert message["role"] in (
@@ -172,7 +175,7 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
 
         # We remove trailing `user` messages - this is added by Mini-SWE-Agent to capture the final git diff for the trajectory
         last_idx = len(response_messages) - 1
-        while response_messages[last_idx]["role"] == "user":
+        while last_idx >= 0 and response_messages[last_idx]["role"] == "user":
             last_idx -= 1
         if last_idx < 0:
             raise ValueError(

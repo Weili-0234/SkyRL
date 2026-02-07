@@ -6,13 +6,26 @@ set -x
 # bash examples/mini_swe_agent/run_mini_swe_30B.sh
 
 # ensure that all worker nodes can access this data directory
-DATA_DIR="$DATA/data/swe_gym_subset"
+DATA_DIR="$DATA/swe_gym_subset"
 
 CKPT_PATH="$DATA/ckpts/llm_mini_swe"
 
 # Save trajectories here for debugging.
 # NOTE: For a multi-node cluster, ensure that this is on NFS so that you can save all trajectories in the same path
 MINISWE_TRAJ_DIR="$HOME/mini_swe_agent_trajs_32B"
+
+# Set FlashInfer workspace to scratch to avoid permission errors
+export FLASHINFER_WORKSPACE_DIR="$DATA/flashinfer_cache"
+mkdir -p "$FLASHINFER_WORKSPACE_DIR"
+
+# Set XDG_CACHE_HOME to scratch to avoid permission errors (e.g. vllm/modelinfos)
+export XDG_CACHE_HOME="$DATA/cache"
+mkdir -p "$XDG_CACHE_HOME"
+
+# Set TRITON_CACHE_DIR to scratch to avoid permission errors
+export TRITON_CACHE_DIR="$DATA/triton_cache"
+mkdir -p "$TRITON_CACHE_DIR"
+chmod 777 "$TRITON_CACHE_DIR" 2>/dev/null || true
 
 NUM_GPUS=8
 NNODES=2
@@ -68,6 +81,7 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   trainer.run_name="mini_swe_32B_swe_gym" \
   trainer.resume_mode=null \
   trainer.ckpt_path="$CKPT_PATH" \
+  trainer.export_path="${DATA:-$HOME}/exports" \
   +generator.miniswe_config_path="examples/mini_swe_agent/swebench.yaml" \
-  +generator.miniswe_traj_dir=$MINISWE_TRAJ_DIR
-  $@
+  +generator.miniswe_traj_dir=$MINISWE_TRAJ_DIR \
+  "$@"
