@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import time
 from typing import Dict, List, Optional, Any, Tuple, Union
 import yaml
 import traceback
@@ -25,9 +28,48 @@ from skyrl_train.generators.utils import (
 
 
 class DefaultAgentWithReminder(DefaultAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.step_timings = []  # Per-step timing: [{step, model_call_time, tool_call_time}, ...]
+
+    def query(self):
+        """Override to time model calls (vLLM inference)."""
+        start = time.time()
+        result = super().query()
+        model_time = time.time() - start
+        self.step_timings.append({
+            "step": self.model.n_calls,
+            "model_call_time": model_time,
+            "tool_call_time": None,
+        })
+        return result
+
     def get_observation(self, response: dict) -> dict:
-        """Execute the action and return the output."""
-        output = self.execute_action(self.parse_action(response))
+        """Execute the action, time it, and return the output."""
+        action = self.parse_action(response)
+
+        # Extract command string from parsed action
+        if isinstance(action, list):
+            commands = [a.get("command", str(a)) if isinstance(a, dict) else str(a) for a in action]
+        elif isinstance(action, dict):
+            commands = [action.get("command", str(action))]
+        else:
+            commands = [str(action)]
+
+        # Get container ID for full docker exec reconstruction
+        container_id = getattr(getattr(self, "env", None), "container_id", None) or ""
+
+        start = time.time()
+        output = self.execute_action(action)
+        tool_time = time.time() - start
+
+        # Update the last timing entry with tool call time and command
+        if self.step_timings:
+            self.step_timings[-1]["tool_call_time"] = tool_time
+            self.step_timings[-1]["command"] = commands[0] if len(commands) == 1 else commands
+            if container_id:
+                self.step_timings[-1]["docker_exec"] = f"docker exec {container_id} {commands[0]}"
+
         observation = self.render_template(self.config.action_observation_template, output=output)
         remaining = self.config.step_limit - self.model.n_calls
 
@@ -58,6 +100,14 @@ def init_and_run(
     # Use new sampling parameters
     # Can also have custom sampling parameters per trajectory (ex: custom max tokens)
     model_config.setdefault("model_kwargs", {}).update(sampling_params)
+
+    # Inject program_id for ThunderAgent capacity scheduling.
+    # Each trajectory is a unique "program" in ThunderAgent's model.
+    # LiteLLM passes extra_body fields through to the request JSON body,
+    # and ThunderAgent extracts program_id from extra_body.program_id.
+    program_id = f"{instance['instance_id']}_{trajectory_id.repetition_id}"
+    model_config.setdefault("model_kwargs", {}).setdefault("extra_body", {})["program_id"] = program_id
+
     model = get_model(litellm_model_name, model_config)
 
     agent = None
@@ -100,7 +150,31 @@ def init_and_run(
 
             save_traj(agent, path, exit_status=exit_status, result=result, extra_info=extra_info, reward=reward, eval_error=eval_error)  # type: ignore[arg-type]
 
-    return (agent.messages if agent is not None else [], reward, error)
+    # Release program from ThunderAgent (free capacity tracking resources).
+    # Fire-and-forget: don't block on failure (ThunderAgent may not be running).
+    try:
+        import httpx
+        httpx.post(
+            f"{os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8001/v1').rsplit('/v1', 1)[0]}/programs/release",
+            json={"program_id": program_id},
+            timeout=5.0,
+        )
+    except Exception:
+        pass
+
+    step_timings = agent.step_timings if agent is not None and hasattr(agent, "step_timings") else []
+
+    # Persist step_timings (model_call_time, tool_call_time, command) to disk
+    if step_timings:
+        try:
+            timings_dir = Path(generator_cfg.miniswe_traj_dir) / f"step_{global_step}" / training_phase
+            timings_dir.mkdir(parents=True, exist_ok=True)
+            timings_path = timings_dir / f"{instance['instance_id']}_{trajectory_id.repetition_id}_timings.json"
+            with open(timings_path, "w") as f:
+                json.dump(step_timings, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save step_timings: {e}")
+    return (agent.messages if agent is not None else [], reward, error, step_timings)
 
 
 class MiniSweAgentGenerator(SkyRLGymGenerator):
@@ -131,6 +205,41 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
         if self.generator_cfg.chat_template.name_or_path is not None:
             raise NotImplementedError("MiniSWEAgentGenerator doesn't support custom chat template")
 
+    def _make_dummy_output(
+        self,
+        prompt: ConversationType,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[List[int], float, str, List[int], List[int], None]:
+        """Create a valid dummy output for failed trajectories.
+
+        Returns data that passes all downstream trainer checks but contributes
+        zero to training (reward=0, loss_mask all zeros, single EOS token).
+        """
+        eos_token_id = self.tokenizer.eos_token_id
+        dummy_response_ids = [eos_token_id]
+        dummy_loss_mask = [0]
+        dummy_reward = 0.0
+        dummy_stop_reason = "error"
+
+        # Construct prompt_ids from available messages
+        try:
+            if messages is not None and len(messages) >= 2:
+                # Use actual messages (system + user) when available
+                dummy_prompt_ids = self.tokenizer.apply_chat_template(
+                    messages[:2], add_generation_prompt=False, tokenize=True
+                )
+            elif isinstance(prompt, list) and len(prompt) >= 2:
+                # Fall back to the input prompt conversation
+                dummy_prompt_ids = self.tokenizer.apply_chat_template(
+                    prompt[:2], add_generation_prompt=False, tokenize=True
+                )
+            else:
+                dummy_prompt_ids = [eos_token_id]
+        except Exception:
+            dummy_prompt_ids = [eos_token_id]
+
+        return (dummy_response_ids, dummy_reward, dummy_stop_reason, dummy_loss_mask, dummy_prompt_ids, None)
+
     async def minisweagent_agent_loop(
         self,
         prompt: ConversationType,
@@ -144,7 +253,7 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
 
         sweagent_config = yaml.safe_load(get_config_path(self.generator_cfg.miniswe_config_path).read_text())
         # NOTE (sumanthrh): Input `prompt` is not used here because mini-swe-agent uses a similar entry from the `instance` obj
-        messages, reward, error = await init_and_run.remote(
+        messages, reward, error, step_timings = await init_and_run.remote(
             env_extras["instance"],
             self.litellm_model_name,
             sweagent_config,
@@ -156,13 +265,12 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
             batch_metadata.training_phase,
         )
         if not len(messages):
-            return None, None, None, None, None, None
+            from loguru import logger
+            logger.warning(f"Empty messages for trajectory {trajectory_id}. Returning dummy output.")
+            return self._make_dummy_output(prompt)
 
         # TODO (sumanthrh): This is currently hardcoded for SWEBench with 2 initial messages (system and user).
         response_messages = messages[2:]
-        print(f"DEBUG: messages length: {len(messages)}")
-        for i, msg in enumerate(messages):
-            print(f"DEBUG: message[{i}] role: {msg.get('role')}")
 
         for message in messages[:2]:
             assert message["role"] in (
@@ -178,9 +286,12 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
         while last_idx >= 0 and response_messages[last_idx]["role"] == "user":
             last_idx -= 1
         if last_idx < 0:
-            raise ValueError(
-                "Found no assistant messages. Please ensure that your environment is configured correctly and the `OPENAI_BASE_URL` points to the HTTP server from the inference engine client"
+            from loguru import logger
+            logger.warning(
+                "Found no assistant messages for this trajectory. Returning dummy output. "
+                "Please ensure that your environment is configured correctly and the `OPENAI_BASE_URL` points to the HTTP server from the inference engine client"
             )
+            return self._make_dummy_output(prompt, messages)
         response_messages = response_messages[: last_idx + 1]
 
         response_ids, loss_mask, _ = get_response_ids_and_loss_mask_from_messages(
@@ -206,6 +317,26 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
 
         return (response_ids, reward, stop_reason, loss_mask, prompt_ids, None)
 
+    async def _collect_vllm_metrics(self, step: int, metrics_log: list, interval: float = 2.0):
+        """Background task to collect vLLM metrics every `interval` seconds during rollout."""
+        try:
+            import httpx
+        except ImportError:
+            return
+        base_url = self.base_url
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    resp = await client.get(f"{base_url}/metrics", timeout=5.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        data["step"] = step
+                        data["collected_at"] = time.time()
+                        metrics_log.append(data)
+                except Exception:
+                    pass
+                await asyncio.sleep(interval)
+
     async def generate(self, input_batch: GeneratorInput) -> GeneratorOutput:
         """
         Generate trajectories for the input batch.
@@ -226,29 +357,76 @@ class MiniSweAgentGenerator(SkyRLGymGenerator):
             self.generator_cfg.backend, self.generator_cfg.sampling_params
         )
 
-        tasks = []
+        # Start background vLLM metrics collection (every 2s during rollout)
+        vllm_metrics_log: list = []
+        metrics_task = asyncio.create_task(
+            self._collect_vllm_metrics(batch_metadata.global_step, vllm_metrics_log)
+        )
 
-        for i in range(len(prompts)):
-            tasks.append(
-                self.minisweagent_agent_loop(
-                    prompts[i],
-                    env_extras[i],
-                    max_tokens=max_tokens,
-                    max_input_length=max_input_length,
-                    sampling_params=sampling_params,
-                    trajectory_id=trajectory_ids[i],
-                    batch_metadata=batch_metadata,
+        from loguru import logger
+
+        # Rate-limit Docker container launches: start trajectories in batches
+        # to avoid overwhelming the Docker daemon with simultaneous container creation.
+        ROLLOUT_BATCH_SIZE = 64
+        ROLLOUT_BATCH_DELAY = 30.0  # seconds between batches
+
+        all_tasks = []
+        total = len(prompts)
+        total_batches = (total + ROLLOUT_BATCH_SIZE - 1) // ROLLOUT_BATCH_SIZE
+
+        for batch_start in range(0, total, ROLLOUT_BATCH_SIZE):
+            batch_end = min(batch_start + ROLLOUT_BATCH_SIZE, total)
+            batch_num = batch_start // ROLLOUT_BATCH_SIZE + 1
+
+            if batch_start > 0:
+                logger.info(
+                    f"Rollout batch {batch_num}/{total_batches}: waiting {ROLLOUT_BATCH_DELAY}s before launching next batch..."
                 )
+                await asyncio.sleep(ROLLOUT_BATCH_DELAY)
+
+            logger.info(
+                f"Rollout batch {batch_num}/{total_batches}: launching {batch_end - batch_start} trajectories [{batch_start}:{batch_end}]"
             )
+            for i in range(batch_start, batch_end):
+                task = asyncio.create_task(
+                    self.minisweagent_agent_loop(
+                        prompts[i],
+                        env_extras[i],
+                        max_tokens=max_tokens,
+                        max_input_length=max_input_length,
+                        sampling_params=sampling_params,
+                        trajectory_id=trajectory_ids[i],
+                        batch_metadata=batch_metadata,
+                    )
+                )
+                all_tasks.append(task)
 
-        all_outputs = await asyncio.gather(*tasks)
+        all_outputs = await asyncio.gather(*all_tasks)
 
-        # Filter out the `None` entries, which means that trajectory generation failed
-        responses = [output[0] for output in all_outputs if output[0] is not None]
-        rewards = [output[1] for output in all_outputs if output[0] is not None]
-        stop_reasons = [output[2] for output in all_outputs if output[0] is not None]
-        loss_masks = [output[3] for output in all_outputs if output[0] is not None]
-        prompt_token_ids = [output[4] for output in all_outputs if output[0] is not None]
+        # Stop background metrics collection
+        metrics_task.cancel()
+        try:
+            await metrics_task
+        except asyncio.CancelledError:
+            pass
+
+        # Save vLLM metrics to file
+        if vllm_metrics_log:
+            try:
+                metrics_dir = Path(self.generator_cfg.miniswe_traj_dir) / f"step_{batch_metadata.global_step}"
+                metrics_dir.mkdir(parents=True, exist_ok=True)
+                metrics_path = metrics_dir / "vllm_metrics.json"
+                with open(metrics_path, "w") as f:
+                    json.dump(vllm_metrics_log, f, indent=2)
+            except Exception:
+                pass
+
+        # All outputs now contain valid data (dummy for failed trajectories)
+        responses = [output[0] for output in all_outputs]
+        rewards = [output[1] for output in all_outputs]
+        stop_reasons = [output[2] for output in all_outputs]
+        loss_masks = [output[3] for output in all_outputs]
+        prompt_token_ids = [output[4] for output in all_outputs]
         if not len(responses):
             raise ValueError(
                 "Found no valid responses for this step. This means that generation failed for all trajectories, likely due to errors in environment setup."

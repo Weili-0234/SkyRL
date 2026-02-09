@@ -47,3 +47,11 @@ tensorboard_log/
 
 # uv lock files
 uv.lock
+
+training_data/
+.claude/
+.gemini/
+CLAUDE.md
+GEMINI.md
+slurm-*.out
+slurm-*.err

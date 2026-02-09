@@ -1,31 +1,16 @@
 set -x
 
 # Colocated GRPO training+generation for Qwen/Qwen3-Coder-30B-A3B-Instruct on the SWE-Bench task.
-# Uses 2 node with 8 GPUs each.
+# Uses 2 nodes with 8 GPUs each.
 # uv run --isolated examples/mini_swe_agent/preprocess_swegym.py --output_dir ~/data/swe_gym_subset
 # bash examples/mini_swe_agent/run_mini_swe_30B.sh
 
-# ensure that all worker nodes can access this data directory
-DATA_DIR="$DATA/swe_gym_subset"
+DATA_DIR="$HOME/data/swe_gym_subset"
+CKPT_PATH="$HOME/ckpts/llm_mini_swe"
 
-CKPT_PATH="$DATA/ckpts/llm_mini_swe"
-
-# Save trajectories here for debugging.
+# Save trajectories here for debugging
 # NOTE: For a multi-node cluster, ensure that this is on NFS so that you can save all trajectories in the same path
-MINISWE_TRAJ_DIR="$HOME/mini_swe_agent_trajs_32B"
-
-# Set FlashInfer workspace to scratch to avoid permission errors
-export FLASHINFER_WORKSPACE_DIR="$DATA/flashinfer_cache"
-mkdir -p "$FLASHINFER_WORKSPACE_DIR"
-
-# Set XDG_CACHE_HOME to scratch to avoid permission errors (e.g. vllm/modelinfos)
-export XDG_CACHE_HOME="$DATA/cache"
-mkdir -p "$XDG_CACHE_HOME"
-
-# Set TRITON_CACHE_DIR to scratch to avoid permission errors
-export TRITON_CACHE_DIR="$DATA/triton_cache"
-mkdir -p "$TRITON_CACHE_DIR"
-chmod 777 "$TRITON_CACHE_DIR" 2>/dev/null || true
+MINISWE_TRAJ_DIR="$HOME/mini_swe_agent_trajs"
 
 NUM_GPUS=8
 NNODES=2
@@ -33,8 +18,7 @@ NUM_INFERENCE_ENGINES=4
 TP_SIZE=4
 LOGGER=wandb
 
-# We use a small batch size here for demonstration
-# NOTE (sumanthrh): The `generator.max_turns` here is actually unused, and we use the `step_limit` from the `swebench.yaml` file. 
+# NOTE (sumanthrh): The `generator.max_turns` here is actually unused, and we use the `step_limit` from the `swebench.yaml` file.
 # This simply has to be a value > 1
 uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agent/.env.miniswe -m examples.mini_swe_agent.main_mini_swe \
   data.train_data="['$DATA_DIR/train.parquet']" \
@@ -51,7 +35,7 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   generator.num_inference_engines=$NUM_INFERENCE_ENGINES \
   generator.inference_engine_tensor_parallel_size=$TP_SIZE \
   trainer.epochs=20 \
-  trainer.eval_batch_size=16 \
+  trainer.eval_batch_size=50 \
   trainer.eval_before_train=true \
   trainer.eval_interval=5 \
   trainer.update_epochs_per_batch=1 \
@@ -59,17 +43,18 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   trainer.policy_mini_batch_size=16 \
   trainer.micro_forward_batch_size_per_gpu=1 \
   trainer.micro_train_batch_size_per_gpu=1 \
+  trainer.dump_data_batch=true \
   trainer.ckpt_interval=10 \
   trainer.max_prompt_length=4096 \
   generator.sampling_params.max_generate_length=4096 \
   generator.max_input_length=30720 \
-  generator.max_turns=50 \
+  generator.max_turns=20 \
   trainer.policy.optimizer_config.lr=1.0e-6 \
   trainer.algorithm.use_kl_loss=true \
   generator.backend=vllm \
   generator.run_engines_locally=True \
   generator.enable_http_endpoint=True \
-  generator.http_endpoint_host='127.0.0.1' \
+  generator.http_endpoint_host='0.0.0.0' \
   generator.http_endpoint_port=8001 \
   generator.weight_sync_backend=nccl \
   generator.async_engine=true \
@@ -78,10 +63,9 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   generator.gpu_memory_utilization=0.8 \
   trainer.logger="$LOGGER" \
   trainer.project_name="mini_swe" \
-  trainer.run_name="mini_swe_32B_swe_gym" \
+  trainer.run_name="mini_swe_30B_swe_gym" \
   trainer.resume_mode=null \
   trainer.ckpt_path="$CKPT_PATH" \
-  trainer.export_path="${DATA:-$HOME}/exports" \
   +generator.miniswe_config_path="examples/mini_swe_agent/swebench.yaml" \
   +generator.miniswe_traj_dir=$MINISWE_TRAJ_DIR \
   "$@"

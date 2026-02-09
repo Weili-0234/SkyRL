@@ -459,6 +459,7 @@ class TrainerConfig(BaseConfig):
     eval_before_train: bool = True
     eval_interval: int = 5
     max_prompt_length: int = 512
+    max_training_seq_len: Optional[int] = None  # If set, truncate response so prompt+response <= this limit before training
     flash_attn: bool = True
     disable_fast_tokenizer: bool = False
     project_name: str = "skyrl"

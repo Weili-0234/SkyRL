@@ -684,6 +684,21 @@ def prepare_runtime_environment(cfg: Union[SkyRLConfig, DictConfig]) -> dict[str
         logger.info(f"Exporting TRITON_CACHE_DIR to ray runtime env: {os.environ['TRITON_CACHE_DIR']}")
         env_vars["TRITON_CACHE_DIR"] = os.environ["TRITON_CACHE_DIR"]
 
+    # NOTE: Export MSWEA_COST_TRACKING for mini-swe-agent cost tracking
+    if os.environ.get("MSWEA_COST_TRACKING"):
+        logger.info(f"Exporting MSWEA_COST_TRACKING to ray runtime env: {os.environ['MSWEA_COST_TRACKING']}")
+        env_vars["MSWEA_COST_TRACKING"] = os.environ["MSWEA_COST_TRACKING"]
+
+    # NOTE: Export SKYRL_WORKER_NCCL_TIMEOUT_IN_S for NCCL timeout in colocated mode
+    if os.environ.get("SKYRL_WORKER_NCCL_TIMEOUT_IN_S"):
+        logger.info(f"Exporting SKYRL_WORKER_NCCL_TIMEOUT_IN_S to ray runtime env: {os.environ['SKYRL_WORKER_NCCL_TIMEOUT_IN_S']}")
+        env_vars["SKYRL_WORKER_NCCL_TIMEOUT_IN_S"] = os.environ["SKYRL_WORKER_NCCL_TIMEOUT_IN_S"]
+
+    # NOTE: Export NCCL timeout env vars
+    for nccl_var in ["NCCL_TIMEOUT", "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", "NCCL_ASYNC_ERROR_HANDLING"]:
+        if os.environ.get(nccl_var):
+            env_vars[nccl_var] = os.environ[nccl_var]
+
 
     if SKYRL_LD_LIBRARY_PATH_EXPORT:
         # export `LD_LIBRARY_PATH` to ray runtime env.

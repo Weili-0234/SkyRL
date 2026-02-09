@@ -1,91 +1,175 @@
-<div align="center">
+# SkyRL RL Training Reproduction: DP=4 Default vs TR(atw=0.1)
 
-# SkyRL: A Modular Full-stack RL Library for LLMs
+## Overview
+This directory provides a reproducible workflow for running SkyRL RL training with ThunderAgent on a SLURM cluster, and comparing rollout throughput in **tokens/sec** for:
 
-<p align="center">
-| <a href="https://docs.skyrl.ai/docs/"><b>Documentation</b></a> | <a href="https://x.com/NovaSkyAI"><b>Twitter/X</b></a> | <a href="https://huggingface.co/NovaSky-AI"><b>Huggingface</b></a> | <a href="https://join.slack.com/t/skyrl/shared_invite/zt-3f6ncn5b8-QawzK3uks6ka3KWoLwsi5Q"><b>Slack Workspace</b></a> |
-</p>
+- `dp4_default`: ThunderAgent router `default`
+- `dp4_tr_atw01`: ThunderAgent router `tr` with `acting_token_weight=0.1`
 
-</div>
+The workflow is designed for the deployment style where this SkyRL repo is used as an example under:
 
----
+- `ThunderAgent-wl/examples/rl_training/`
 
-# Overview
+## Reproduction Target
+The goal is to reproduce the **per-step rollout throughput (tokens/sec)** comparison under:
 
-SkyRL is a full-stack RL library that provides the following components:
+- Model: `Qwen/Qwen3-14B`
+- Inference layout: DP=4, TP=1 (4 vLLM engines)
+- Training layout: FSDP2, SP=4, non-colocated (4 training GPUs)
+- Data: `SumanthRH/SWE-Gym-Subset`
+- Batch config: `train_batch_size=99`, `n_samples_per_prompt=4` (396 trajectories/step)
 
-- [`skyrl-agent`](./skyrl-agent): Our agent layer for training long-horizon, real-world agents. For exact reproduction of [SkyRL-v0](https://novasky-ai.notion.site/skyrl-v0) results, please checkout to commit a0d50c482436af7fac8caffa4533616a78431d66.
-- [`skyrl-train`](./skyrl-train): Our modular, performant training framework for RL.
-- [`skyrl-gym`](./skyrl-gym): Our gymnasium of tool-use tasks, including a library of math, coding, search and SQL environments implemented in the Gymnasium API.
-- [`skyrl-tx`](./skyrl-tx): A cross-platform library to enable users to expose a local [Tinker](https://thinkingmachines.ai/tinker/)-like REST API for model post-training.
+Throughput definition is exactly aligned with `analyze_all.py`:
 
-# Getting Started
+- `tokens/sec = (396 * avg_response_length) / generate_duration_seconds`
 
-For a guide on developing with SkyRL, take at look at our [Development Guide](https://docs.skyrl.ai/docs/getting-started/development) docs.
+## Expected Directory Layout
+This README assumes a layout like:
 
-For model training, checkout [`skyrl-train`](./skyrl-train) to start using, modifying, or building on top of the SkyRL training stack. See our [quickstart docs](https://docs.skyrl.ai/docs/index) to ramp up!
-
-For building environments, checkout [`skyrl-gym`](./skyrl-gym) to integrate your task in the simple gymnasium interface.
-
-For agentic pipelines, check out [`skyrl-agent`](./skyrl-agent) for our work on optimizing and scaling pipelines for multi-turn tool use LLMs on long-horizon, real-environment tasks.
-
-
-# News
-- **[2025/11/26]** 🎉 We released SkyRL-Agent: An agent layer for efficient, multi-turn, long-horizon agent training and evaluation. [[Paper](https://arxiv.org/pdf/2511.16108)]
-- **[2025/10/06]** 🎉 We released SkyRL tx: An open implementation of a backend for the Tinker API to run a Tinker-like service on their own hardware. [[Blog](https://novasky-ai.notion.site/skyrl-tx)]
-- **[2025/06/26]** 🎉 We released SkyRL-v0.1: A highly-modular, performant RL training framework. [[Blog](https://novasky-ai.notion.site/skyrl-v01)]
-- **[2025/06/26]** 🎉 We released SkyRL-Gym: A library of RL environments for LLMs implemented with the Gymnasium API. [[Blog](https://novasky-ai.notion.site/skyrl-v01)]
-- **[2025/05/20]** 🎉 We released SkyRL-SQL: a multi-turn RL training pipeline for Text-to-SQL, along with SkyRL-SQL-7B — a model trained on just 653 samples that outperforms both GPT-4o and o4-mini!
-- **[2025/05/06]** 🎉 We released SkyRL-v0: our open RL training pipeline for multi-turn tool use LLMs, optimized for long-horizon, real-environment tasks like SWE-Bench!
-
-# Links
-- 📜 [Fully Async RL with In-Flight Weight Updates in SkyRL](https://docs.skyrl.ai/docs/tutorials/fully_async)
-- 📜 [Open Recipes on SkyRL](https://docs.skyrl.ai/docs/recipes/overview)
-- 📜 [SkyRL-Agent Paper](https://arxiv.org/pdf/2511.16108)
-- 📜 [On-Policy Distillation on SkyRL Blog Post](https://novasky-ai.notion.site/on-policy-distillation)
-- 📜 [Search-R1 on SkyRL Blog Post](https://novasky-ai.notion.site/skyrl-searchr1)
-- 📜 [SkyRL-v0.1 Blog Post](https://novasky-ai.notion.site/skyrl-v01)
-- 📜 [SkyRL-SQL Blog Post](https://novasky-ai.notion.site/skyrl-sql)
-- 📜 [SkyRL-v0 Blog Post](https://novasky-ai.notion.site/skyrl-v0)
-
-# Projects using SkyRL
-- [Biomni-R0](https://biomni.stanford.edu/blog/biomni-r0-technical-report/): Using RL to Hill-Climb Biomedical Reasoning Agents to Expert-Level ![GitHub Repo stars](https://img.shields.io/github/stars/snap-stanford/Biomni)
-- [How to Train Your Advisor](https://github.com/az1326/advisor-models): Steering Black-Box LLMs with Advisor Models ![GitHub Repo stars](https://img.shields.io/github/stars/az1326/advisor-models)
-- [OpenThoughts-Agent](https://github.com/open-thoughts/OpenThoughts-Agent): Data recipes and robust infrastructure for training AI agents ![GitHub Repo stars](https://img.shields.io/github/stars/open-thoughts/OpenThoughts-Agent)
-- [Endless Terminals](https://arxiv.org/abs/2601.16443): A fully autonomous pipeline that procedurally generates terminal tasks for RL training with no human annotation needed ![GitHub Repo stars](https://img.shields.io/github/stars/kanishkg/endless-terminals)
-
-# Acknowledgement
-
-This work is done at [**Berkeley Sky Computing Lab**](https://sky.cs.berkeley.edu/) in collaboration with [**Anyscale**](https://www.anyscale.com/), with generous compute support from [**Anyscale**](https://www.anyscale.com/), [**Databricks**](https://www.databricks.com/), [**NVIDIA**](https://developer.nvidia.com/brev), [**Lambda Labs**](https://lambdalabs.com/service/gpu-cloud?srsltid=AfmBOop5FnmEFTkavVtdZDsLWvHWNg6peXtat-OXJ9MW5GMNsk756PE5), [**AMD**](https://www.amd.com/en), [**AWS**](https://aws.amazon.com/), and [**Modal**](https://modal.com/).
-
-We adopt many lessons and code from several great projects such as [veRL](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF), [Search-R1](https://github.com/PeterGriffinJin/Search-R1), [OpenReasonerZero](https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero), and [NeMo-RL](https://github.com/NVIDIA-NeMo/RL). We appreciate each of these teams and their contributions to open-source research!
-
-
-# Citation
-
-If you find the work in this repository helpful, please consider citing:
-
-```bibtex
-@misc{cao2025skyrl,
-  title     = {SkyRL-v0: Train Real-World Long-Horizon Agents via Reinforcement Learning},
-  author    = {Shiyi Cao and Sumanth Hegde and Dacheng Li and Tyler Griggs and Shu Liu and Eric Tang and Jiayi Pan and Xingyao Wang and Akshay Malik and Graham Neubig and Kourosh Hakhamaneshi and Richard Liaw and Philipp Moritz and Matei Zaharia and Joseph E. Gonzalez and Ion Stoica},
-  year      = {2025},
-}
+```text
+<THUNDERAGENT_ROOT>/
+├── examples/
+│   └── rl_training/
+│       └── SkyRL/                      # this repo
+└── ThunderAgent/                       # python package source
 ```
 
-```bibtex
-@misc{liu2025skyrlsql,
-      title={SkyRL-SQL: Matching GPT-4o and o4-mini on Text2SQL with Multi-Turn RL},
-      author={Shu Liu and Sumanth Hegde and Shiyi Cao and Alan Zhu and Dacheng Li and Tyler Griggs and Eric Tang and Akshay Malik and Kourosh Hakhamaneshi and Richard Liaw and Philipp Moritz and Matei Zaharia and Joseph E. Gonzalez and Ion Stoica},
-      year={2025},
-}
+In this layout:
+
+- `SKYRL_HOST_DIR=<THUNDERAGENT_ROOT>/examples/rl_training/SkyRL`
+- `THUNDERAGENT_HOST_DIR=<THUNDERAGENT_ROOT>`
+
+If your layout differs, set these paths explicitly (see "Required Customization").
+
+## Prerequisites
+- SLURM cluster access (1 node, 8 GPUs, tested with H100 80GB)
+- Docker available on compute nodes
+- Permission to run `sudo` for Docker daemon configuration (`/etc/docker/daemon.json`)
+- Python 3.10+ on the submission host
+- WANDB API key (required)
+- HuggingFace token (recommended for model/dataset/image pulls)
+
+## Required Customization
+Before running, customize the following.
+
+1. `api-keys.sh` in SkyRL root:
+```bash
+export WANDB_API_KEY="<your_wandb_key>"
+# optional but recommended
+export HF_TOKEN="<your_hf_token>"
 ```
 
-```bibtex
-@misc{griggs2025skrylv01,
-      title={Evolving SkyRL into a Highly-Modular RL Framework},
-      author={Tyler Griggs and Sumanth Hegde and Eric Tang and Shu Liu and Shiyi Cao and Dacheng Li and Charlie Ruan and Philipp Moritz and Kourosh Hakhamaneshi and Richard Liaw and Akshay Malik and Matei Zaharia and Joseph E. Gonzalez and Ion Stoica},
-      year={2025},
-      note={Notion Blog}
-}
+2. SBATCH header fields in:
+- `sbatch_repro_dp4_default.sh`
+- `sbatch_repro_dp4_tr_atw01.sh`
+
+Typical fields to edit for your cluster:
+- `#SBATCH --partition=...`
+- `#SBATCH --time=...`
+- `#SBATCH --cpus-per-task=...`
+- `#SBATCH --gpus=...`
+- optional: `#SBATCH --account=...`, `#SBATCH --qos=...`, `#SBATCH --exclude=...`
+
+3. Runtime path/image variables (export before submission):
+```bash
+export SKYRL_HOST_DIR="<path-to-SkyRL>"
+export THUNDERAGENT_HOST_DIR="<path-to-ThunderAgent-wl-root>"
+export TRAINING_DATA_SYNC_DEST="<where-to-sync-training-artifacts>"
+export DOCKER_IMAGE="novaskyai/skyrl-train-ray-2.51.1-py3.12-cu12.8"
 ```
+
+If not set, defaults are inferred from the expected layout above.
+
+## Setup
+From your SkyRL directory:
+
+```bash
+cd <THUNDERAGENT_ROOT>/examples/rl_training/SkyRL
+
+# Optional: verify key files
+ls launch_profiled_training_14b_dp4.sh
+ls skyrl-train/examples/mini_swe_agent/run_mini_swe_14B_dp4.sh
+```
+
+Prepare credentials:
+
+```bash
+cat > api-keys.sh <<'SH'
+export WANDB_API_KEY="<your_wandb_key>"
+export HF_TOKEN="<your_hf_token>"
+SH
+chmod 600 api-keys.sh
+```
+
+## Reproduction
+### Option A: Submit both jobs with one command
+```bash
+cd <THUNDERAGENT_ROOT>/examples/rl_training/SkyRL
+
+export SKYRL_HOST_DIR="$(pwd)"
+export THUNDERAGENT_HOST_DIR="$(cd ../../.. && pwd)"
+export TRAINING_DATA_SYNC_DEST="$(pwd)/training_data"
+
+bash submit_repro_dp4_default_vs_tr_atw01.sh
+```
+
+### Option B: Submit jobs separately
+```bash
+cd <THUNDERAGENT_ROOT>/examples/rl_training/SkyRL
+
+sbatch --export=ALL sbatch_repro_dp4_default.sh
+sbatch --export=ALL sbatch_repro_dp4_tr_atw01.sh
+```
+
+## Monitoring
+Check job states:
+
+```bash
+squeue -u "$USER" --format="%.10i %.20j %.8T %.10M %.20N"
+```
+
+Check logs:
+
+```bash
+tail -n 40 slurm-<JOBID>.out
+tail -n 60 slurm-<JOBID>.err
+```
+
+Useful rollout markers:
+
+```bash
+grep "Started: 'step'" slurm-<JOBID>.err
+grep "Finished: 'generate'" slurm-<JOBID>.err
+grep "avg_response_length" slurm-<JOBID>.err
+```
+
+## Throughput Analysis (tokens/sec only)
+After both jobs complete at least one rollout step:
+
+```bash
+python3 analyze_dp4_tokens_compare.py \
+  --default-job <DEFAULT_JOB_ID> \
+  --tr-job <TR_JOB_ID>
+```
+
+The script prints a focused markdown table:
+
+- one row per rollout step
+- `dp4_default tokens/sec`
+- `dp4_tr_atw01 tokens/sec`
+- delta and delta percentage
+- average over paired completed steps
+
+This script intentionally reports only throughput (tokens/sec), not the full metric set from `analyze_all.py`.
+
+## New Repro Scripts in This Directory
+- `sbatch_repro_dp4_default.sh`: explicit DP=4 default-router job
+- `sbatch_repro_dp4_tr_atw01.sh`: explicit DP=4 TR job with `acting_token_weight=0.1`
+- `scripts/repro/run_dp4_repro_job.sh`: shared SLURM job body used by both scripts
+- `submit_repro_dp4_default_vs_tr_atw01.sh`: submit both jobs and print job IDs
+- `analyze_dp4_tokens_compare.py`: focused per-step tokens/sec comparison table
+
+## Notes
+- Existing legacy launch/analysis scripts are left unchanged.
+- `sbatch_repro_dp4_tr_atw01.sh` is explicit by name so the TR setting is unambiguous.
+- Training artifacts are synced to `TRAINING_DATA_SYNC_DEST/job_<JOBID>_dp4_<tag>/`.

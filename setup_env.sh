@@ -29,7 +29,7 @@ EOF'
 echo "=== Step 3: Start head node ==="
 srun --overlap --jobid=$JOBID --nodes=1 --nodelist=$NODE1 bash -c "DOCKER_GID=\$(getent group docker | cut -d: -f3) && newgrp docker << EOF
 docker rm -f skyrl-head 2>/dev/null
-docker run -d --runtime=nvidia --gpus all --shm-size=16g \
+docker run -d --runtime=nvidia --gpus all --cpuset-cpus=0-167 --shm-size=16g \
   --group-add \$DOCKER_GID \
   --network=host --name skyrl-head \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -50,7 +50,7 @@ EOF"
 echo "=== Step 4: Start worker node ==="
 srun --overlap --jobid=$JOBID --nodes=1 --nodelist=$NODE2 bash -c "DOCKER_GID=\$(getent group docker | cut -d: -f3) && newgrp docker << EOF
 docker rm -f skyrl-worker 2>/dev/null
-docker run -d --runtime=nvidia --gpus all --shm-size=16g \
+docker run -d --runtime=nvidia --gpus all --cpuset-cpus=0-167 --shm-size=16g \
   --group-add \$DOCKER_GID \
   --network=host --name skyrl-worker \
   -v /var/run/docker.sock:/var/run/docker.sock \

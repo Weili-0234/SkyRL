@@ -29,6 +29,12 @@ export DATA="$SCRATCH_DIR"
 export MINISWE_TRAJ_DIR="$SCRATCH_DIR/mini_swe_agent_trajs_32B"
 export MSWEA_COST_TRACKING='ignore_errors'
 
+# NCCL Settings - Increase timeout for colocated training+inference weight sync
+export SKYRL_WORKER_NCCL_TIMEOUT_IN_S=1800
+export NCCL_TIMEOUT=1800000
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600
+export NCCL_ASYNC_ERROR_HANDLING=1
+
 # Ensure directories exist and are writable
 mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$FLASHINFER_WORKSPACE_DIR" "$UV_CACHE_DIR" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$MINISWE_TRAJ_DIR"
 

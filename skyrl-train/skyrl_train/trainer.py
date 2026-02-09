@@ -336,6 +336,9 @@ class RayPPOTrainer:
                 self.global_step += 1
 
                 del training_input, generator_output
+                import gc
+                gc.collect()
+                self.dispatch.empty_cache()
 
         pbar.close()
         if self.colocate_all:
@@ -597,6 +600,28 @@ class RayPPOTrainer:
         loss_masks: List[List[int]] = generator_output["loss_masks"]
 
         logprobs: Optional[List[List[float]]] = generator_output.get("rollout_logprobs", None)
+
+        # Truncate responses so that total seq_len (prompt + response) <= max_training_seq_len
+        max_training_seq_len = self.cfg.trainer.max_training_seq_len
+        if max_training_seq_len is not None:
+            eos_token_id = self.tokenizer.eos_token_id
+            num_truncated = 0
+            for i in range(len(prompt_ids)):
+                max_response = max_training_seq_len - len(prompt_ids[i])
+                if max_response <= 0:
+                    max_response = 1  # keep at least eos
+                if len(response_ids[i]) > max_response:
+                    num_truncated += 1
+                    response_ids[i] = response_ids[i][:max_response]
+                    response_ids[i][-1] = eos_token_id
+                    rewards[i] = rewards[i][:max_response]
+                    loss_masks[i] = loss_masks[i][:max_response]
+                    if logprobs is not None:
+                        logprobs[i] = logprobs[i][:max_response]
+            if num_truncated > 0:
+                logger.info(
+                    f"Truncated {num_truncated}/{len(prompt_ids)} sequences to max_training_seq_len={max_training_seq_len}"
+                )
 
         (
             sequences_tensor,
@@ -1097,6 +1122,7 @@ class RayPPOTrainer:
         if self.has_critic:
             with Timer("critic_train", self.all_timings):
                 critic_status = self._execute_training_step("critic", data)
+        self.dispatch.empty_cache()
         with Timer("policy_train", self.all_timings):
             policy_status = self._execute_training_step("policy", data)
 

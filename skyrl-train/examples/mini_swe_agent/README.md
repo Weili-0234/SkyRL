@@ -40,7 +40,7 @@ We provide example scripts for different model sizes:
 
 **Qwen3-8B** (requires 1x 8xH100 node):
 ```bash
-bash examples/mini_swe_agent/run_mini_swe_8B.sh
+  bash examples/mini_swe_agent/run_mini_swe_8B.sh
 ```
 
 **Qwen3-Coder-30B** (requires 2x 8xH100 nodes):

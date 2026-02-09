@@ -309,6 +309,23 @@ def create_app() -> fastapi.FastAPI:
     async def health_check():
         return {"status": "healthy"}
 
+    @app.get("/metrics")
+    async def get_metrics():
+        """Return vLLM engine metrics (KV cache usage, preemptions) from all engines."""
+        if _global_inference_engine_client is None:
+            return JSONResponse(
+                content={"error": "Inference engine client not initialized"},
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+            )
+        all_engine_metrics = []
+        for i, engine in enumerate(_global_inference_engine_client.engines):
+            try:
+                metrics = await engine.get_engine_metrics()
+                all_engine_metrics.append({"engine_id": i, **metrics})
+            except Exception as e:
+                all_engine_metrics.append({"engine_id": i, "error": str(e)})
+        return {"timestamp": time.time(), "engines": all_engine_metrics}
+
     # This handler only catches unexpected server-side exceptions
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):

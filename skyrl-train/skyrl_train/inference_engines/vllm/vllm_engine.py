@@ -340,16 +340,16 @@ class AsyncVLLMInferenceEngine(BaseVLLMInferenceEngine):
             request_logger=None,
             chat_template=openai_kwargs.pop("chat_template", None),  # used to template /chat/completions requests
             chat_template_content_format="auto",
+            enable_prompt_tokens_details=True,
             **legacy_kwargs,
             **openai_kwargs,
         )
 
-        # TODO(Charlie): revisit kwargs `return_tokens_as_token_ids`,
-        # `enable_prompt_tokens_details`, `enable_force_include_usage`.
         self.openai_serving_completion = OpenAIServingCompletion(
             engine_client=engine,
             models=models,
             request_logger=None,
+            enable_prompt_tokens_details=True,
             **legacy_kwargs,
         )
         return engine
@@ -600,6 +600,68 @@ class AsyncVLLMInferenceEngine(BaseVLLMInferenceEngine):
             await engine.abort(unfinished_request_ids)
         await engine.reset_prefix_cache()  # avoid KV-cache pollution
         logger.info(f"abort_generation() finished, aborted {len(unfinished_request_ids)} requests")
+
+    async def get_engine_metrics(self) -> Dict[str, Any]:
+        """Collect vLLM engine metrics: KV cache usage, preemptions, request counts.
+
+        In vLLM v1 (>=0.9), the engine core runs in a subprocess. The scheduler
+        and KV cache manager are not directly accessible from the AsyncLLM object.
+        Instead, scheduler stats (kv_cache_usage, preemptions) flow back via
+        EngineCoreOutputs and are recorded by StatLoggerManager's LoggingStatLogger.
+
+        Access path: engine.logger_manager.stat_loggers -> PerEngineStatLoggerAdapter
+        -> per_engine_stat_loggers[0] (LoggingStatLogger) -> last_scheduler_stats
+        """
+        metrics: Dict[str, Any] = {"timestamp": time.time()}
+        try:
+            engine = self._get_engine()
+
+            # Number of in-flight requests (works in both v0.x and v1)
+            if hasattr(engine, "output_processor"):
+                metrics["num_in_flight_requests"] = len(engine.output_processor.request_states)
+
+            # vLLM v1: access scheduler stats via logger_manager
+            # logger_manager is created when log_stats=True (default)
+            logger_manager = getattr(engine, "logger_manager", None) or getattr(self.llm, "logger_manager", None)
+            if logger_manager is not None and hasattr(logger_manager, "stat_loggers"):
+                for stat_logger in logger_manager.stat_loggers:
+                    # PerEngineStatLoggerAdapter wraps per-engine LoggingStatLoggers
+                    if hasattr(stat_logger, "per_engine_stat_loggers"):
+                        for idx, per_logger in stat_logger.per_engine_stat_loggers.items():
+                            if hasattr(per_logger, "last_scheduler_stats"):
+                                stats = per_logger.last_scheduler_stats
+                                metrics["kv_cache_usage_pct"] = round(stats.kv_cache_usage * 100, 2)
+                                metrics["num_running_reqs"] = getattr(stats, "num_running_reqs", 0)
+                                metrics["num_waiting_reqs"] = getattr(stats, "num_waiting_reqs", 0)
+                            if hasattr(per_logger, "num_preemptions"):
+                                metrics["num_cumulative_preemption"] = per_logger.num_preemptions
+                            break  # single engine per Ray actor
+                        if "kv_cache_usage_pct" in metrics:
+                            break
+                    # Direct LoggingStatLogger (fallback)
+                    elif hasattr(stat_logger, "last_scheduler_stats"):
+                        stats = stat_logger.last_scheduler_stats
+                        metrics["kv_cache_usage_pct"] = round(stats.kv_cache_usage * 100, 2)
+                        metrics["num_running_reqs"] = getattr(stats, "num_running_reqs", 0)
+                        metrics["num_waiting_reqs"] = getattr(stats, "num_waiting_reqs", 0)
+                        if hasattr(stat_logger, "num_preemptions"):
+                            metrics["num_cumulative_preemption"] = stat_logger.num_preemptions
+                        break
+
+            # KV cache config: block_size and num_gpu_blocks for capacity calculation
+            # In vLLM v1, these are set on vllm_config.cache_config after engine core init
+            vllm_config = getattr(self.llm, "vllm_config", None)
+            if vllm_config is not None:
+                cache_cfg = getattr(vllm_config, "cache_config", None)
+                if cache_cfg is not None:
+                    if getattr(cache_cfg, "block_size", None) is not None:
+                        metrics["block_size"] = cache_cfg.block_size
+                    if getattr(cache_cfg, "num_gpu_blocks", None) is not None:
+                        metrics["num_gpu_blocks"] = cache_cfg.num_gpu_blocks
+
+        except Exception as e:
+            metrics["error"] = str(e)
+        return metrics
 
 
 class _MinimalRequest:

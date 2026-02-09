@@ -55,7 +55,7 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   generator.backend=vllm \
   generator.run_engines_locally=True \
   generator.enable_http_endpoint=True \
-  generator.http_endpoint_host='127.0.0.1' \
+  generator.http_endpoint_host='0.0.0.0' \
   generator.http_endpoint_port=8001 \
   generator.weight_sync_backend=nccl \
   generator.async_engine=true \
@@ -68,5 +68,5 @@ uv run --isolated --extra vllm --extra miniswe --env-file examples/mini_swe_agen
   trainer.resume_mode=null \
   trainer.ckpt_path="$CKPT_PATH" \
   +generator.miniswe_config_path="examples/mini_swe_agent/swebench.yaml" \
-  +generator.miniswe_traj_dir=$MINISWE_TRAJ_DIR
-  $@
+  +generator.miniswe_traj_dir=$MINISWE_TRAJ_DIR \
+  "$@"
